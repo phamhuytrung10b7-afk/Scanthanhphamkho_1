@@ -1,969 +1,282 @@
-// ... (previous imports)
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Download, ScanLine, Users, CheckCircle, AlertOctagon, RefreshCw, Box, Settings, AlertTriangle, Layers, Edit, XCircle, Activity, List, Tag, Upload, Maximize, Minimize, ClipboardList, AlertCircle } from 'lucide-react';
-import { format } from 'date-fns';
-import { read, utils } from 'xlsx';
 
-import { ScanRecord, Stats, ErrorState, DEFAULT_PROCESS_STAGES, Stage } from './types';
-import { Button } from './Button';
-import { ErrorModal } from './ErrorModal';
-import { StatCard } from './StatCard';
-import { StageSettingsModal } from './StageSettingsModal';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { GoogleGenAI, Type } from '@google/genai';
+import { 
+  getLunarDate, 
+  getCanChiYear, 
+  getCanChiMonth, 
+  getCanChiDay, 
+  CAN, 
+  CHI 
+} from './lunarUtils';
+import { fillLunarGaps } from './lunarData';
 
-export default function App() {
-  // --- STATE ---
-  
-  // Configuration
-  const [stageEmployees, setStageEmployees] = useState<Record<number, string>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_employees');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
+const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+const MONTHS_VN = [
+  "Tháng Giêng", "Tháng Hai", "Tháng Ba", "Tháng Tư", "Tháng Năm", "Tháng Sáu",
+  "Tháng Bảy", "Tháng Tám", "Tháng Chín", "Tháng Mười", "Tháng Mười Một", "Tháng Chạp"
+];
 
-  const [currentModel, setCurrentModel] = useState<string>(() => {
-    return localStorage.getItem('proscan_current_model') || '';
-  }); // Header Input: Simple "Session Plan" Validation
+// Major Public Holidays in Vietnam for 2026
+const HOLIDAYS_2026 = [
+  "2026-01-01", // Tết Dương Lịch
+  "2026-02-16", // Giao thừa Tết Nguyên Đán
+  "2026-02-17", // Mùng 1 Tết
+  "2026-02-18", // Mùng 2 Tết
+  "2026-02-19", // Mùng 3 Tết
+  "2026-02-20", // Mùng 4 Tết
+  "2026-02-21", // Mùng 5 Tết
+  "2026-02-22", // Mùng 6 Tết
+  "2026-04-26", // Giỗ tổ Hùng Vương (10/3 Âm lịch)
+  "2026-04-30", // Ngày Giải Phóng Miền Nam
+  "2026-05-01", // Quốc Tế Lao Động
+  "2026-09-02", // Quốc Khánh
+  "2026-09-03", // Nghỉ lễ Quốc Khánh
+];
 
-  const [modelName, setModelName] = useState<string>(() => {
-    return localStorage.getItem('proscan_model_name') || '';
-  }); // New: Actual Model Name
-  
-  // Dynamic Stages with LocalStorage Persistence
-  const [stages, setStages] = useState<Stage[]>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_stages');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // FORCE RESET if old data has more than 1 stage (Migration to Single Stage App)
-        if (Array.isArray(parsed) && parsed.length > 1) {
-             return DEFAULT_PROCESS_STAGES;
-        }
+const App: React.FC = () => {
+  const [currentDate, setCurrentDate] = useState(new Date(2026, 0, 1));
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date(2026, 0, 1));
+  const [insight, setInsight] = useState<string>("");
+  const [loadingInsight, setLoadingInsight] = useState(false);
 
-        return parsed.map((s: any) => ({
-          ...s,
-          // Update default array size from potential old/new sizes to 8
-          additionalFieldLabels: s.additionalFieldLabels ? [...s.additionalFieldLabels, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldDefaults: s.additionalFieldDefaults ? [...s.additionalFieldDefaults, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldValidationLists: s.additionalFieldValidationLists ? [...s.additionalFieldValidationLists, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          // Ensure validationRules exists (keeping for data compatibility even if unused logic)
-          validationRules: s.validationRules || []
-        }));
-      }
-    } catch (e) {
-      console.error("Failed to load stages from storage", e);
-    }
-    return DEFAULT_PROCESS_STAGES;
-  });
+  const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.API_KEY || "" }), []);
 
-  // Always Stage 1
-  const [currentStage] = useState<number>(1);
+  const currentYear = currentDate.getFullYear();
+  const currentMonth = currentDate.getMonth();
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Data
-  const [history, setHistory] = useState<ScanRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_history');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) { return []; }
-  });
-
-  const [productProgress, setProductProgress] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_progress');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
-
-  const [productStatus, setProductStatus] = useState<Record<string, 'valid' | 'defect'>>(() => {
-    try {
-      const saved = localStorage.getItem('proscan_status');
-      return saved ? JSON.parse(saved) : {};
-    } catch (e) { return {}; }
-  });
-  
-  // UI State
-  const [stats, setStats] = useState<Stats>({ success: 0, defect: 0, error: 0 });
-  
-  // Inputs
-  const [employeeInput, setEmployeeInput] = useState('');
-  const [defectCode, setDefectCode] = useState(''); 
-  const [measurementValue, setMeasurementValue] = useState(''); 
-  const [productInput, setProductInput] = useState('');
-  
-  // New: State for 8 additional fields
-  const [additionalValues, setAdditionalValues] = useState<string[]>(Array(8).fill(""));
-  
-  const [errorModal, setErrorModal] = useState<ErrorState>({ isOpen: false, message: '' });
-
-  // Refs
-  const employeeInputRef = useRef<HTMLInputElement>(null);
-  const defectInputRef = useRef<HTMLInputElement>(null);
-  const measurementInputRef = useRef<HTMLInputElement>(null);
-  const productInputRef = useRef<HTMLInputElement>(null);
-  const modelInputRef = useRef<HTMLInputElement>(null);
-  const modelNameRef = useRef<HTMLInputElement>(null); // New Ref for Model Name
-  // Refs for 8 additional inputs
-  const extraInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // --- DERIVED STATE: Plan List & Progress ---
-  const planList = useMemo(() => {
-      if (!currentModel.trim()) return [];
-      // Split by whitespace to get individual codes
-      return currentModel.trim().split(/\s+/).map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
-  }, [currentModel]);
-
-  // Calculate stats
-  const validScanCount = history.filter(r => r.status === 'valid').length;
-  const defectScanCount = history.filter(r => r.status === 'defect').length;
-  const errorScanCount = history.filter(r => r.status === 'error').length;
-
-  // --- PERSISTENCE EFFECTS ---
-  // Automatically save data whenever it changes
-  useEffect(() => { localStorage.setItem('proscan_employees', JSON.stringify(stageEmployees)); }, [stageEmployees]);
-  useEffect(() => { localStorage.setItem('proscan_current_model', currentModel); }, [currentModel]);
-  useEffect(() => { localStorage.setItem('proscan_model_name', modelName); }, [modelName]);
-  useEffect(() => { localStorage.setItem('proscan_history', JSON.stringify(history)); }, [history]);
-  useEffect(() => { localStorage.setItem('proscan_progress', JSON.stringify(productProgress)); }, [productProgress]);
-  useEffect(() => { localStorage.setItem('proscan_status', JSON.stringify(productStatus)); }, [productStatus]);
-  useEffect(() => { localStorage.setItem('proscan_stages', JSON.stringify(stages)); }, [stages]);
-
-  // --- EFFECT: Calculate Stats for Current Stage ---
-  useEffect(() => {
-    setStats({ 
-      success: validScanCount,
-      defect: defectScanCount,
-      error: errorScanCount
-    });
-  }, [history, validScanCount, defectScanCount, errorScanCount]);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  // --- HELPER: Get Current Stage Object & Employee ---
-  const currentStageObj = useMemo(() => stages.find(s => s.id === currentStage) || stages[0], [stages, currentStage]);
-  const currentEmployeeId = stageEmployees[currentStage];
-  
-  // Determine active extra fields (those with labels)
-  const activeExtraFields = useMemo(() => {
-    if (!currentStageObj?.additionalFieldLabels) return [];
-    return currentStageObj.additionalFieldLabels.map((label, idx) => ({ label, idx })).filter(f => f.label.trim() !== "");
-  }, [currentStageObj]);
-
-  // Helper to load defaults for current stage
-  const loadDefaults = useCallback(() => {
-    if (currentStageObj?.additionalFieldDefaults) {
-      // Create a copy of defaults, ensuring empty strings for missing values
-      const defaults = [...currentStageObj.additionalFieldDefaults];
-      while(defaults.length < 8) defaults.push("");
-      setAdditionalValues(defaults);
-    } else {
-      setAdditionalValues(Array(8).fill(""));
-    }
-  }, [currentStageObj]);
-
-  // Apply defaults when stage changes
-  useEffect(() => {
-    loadDefaults();
-  }, [currentStage, loadDefaults]);
-
-  // --- INITIAL FOCUS ---
-  useEffect(() => {
-    if (!modelName) modelNameRef.current?.focus();
-    else if (!currentModel) modelInputRef.current?.focus();
-    else if (!currentEmployeeId) employeeInputRef.current?.focus();
-    else {
-      // Logic for initial focus based on stage config
-      if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-      else productInputRef.current?.focus();
-    }
-  }, [currentStage]);
-
-  // --- HANDLERS ---
-  
-  const toggleFullScreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable full-screen mode: ${err.message}`);
-      });
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const data = await file.arrayBuffer();
-      const workbook = read(data);
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      
-      // Get data as array of arrays to be safe about column structure
-      // Type 'any' used because sheet_to_json returns generic objects
-      const jsonData = utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-      
-      // Extract 1st column, filter empties, join by space
-      const codes = jsonData
-          .map(row => row[0]) // Take first cell of each row
-          .filter(cell => cell !== undefined && cell !== null && String(cell).trim() !== '')
-          .map(cell => String(cell).trim().toUpperCase());
-
-      if (codes.length === 0) {
-        alert("File không có dữ liệu ở cột A!");
-        return;
-      }
-
-      const resultString = codes.join(' ');
-      setCurrentModel(resultString);
-      alert(`Đã tải thành công ${codes.length} mã kiểm tra!`);
-      
-      // Reset file input
-      e.target.value = '';
-    } catch (err) {
-      console.error(err);
-      alert("Lỗi đọc file Excel. Vui lòng kiểm tra lại định dạng.");
-    }
-  };
-
-  const handleEmployeeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      const val = employeeInput.trim();
-      if (val) {
-        setStageEmployees(prev => ({ ...prev, [currentStage]: val }));
-        setEmployeeInput('');
-        
-        // Smart Focus Next
-        setTimeout(() => {
-             if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-             else productInputRef.current?.focus();
-        }, 50);
-      }
-    }
-  };
-
-  const handleDefectScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') productInputRef.current?.focus();
-  };
-
-  const handleMeasurementScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      if (measurementValue.trim()) {
-        // Logic: Find the first ACTIVE field that DOES NOT have a value (skips defaults)
-        const nextField = activeExtraFields.find(f => !additionalValues[f.idx]);
-        
-        if (nextField) {
-           extraInputRefs.current[nextField.idx]?.focus();
-        } else if (activeExtraFields.length > 0) {
-           const hasManualFields = activeExtraFields.some(f => !currentStageObj?.additionalFieldDefaults?.[f.idx]);
-           if (!hasManualFields) {
-             productInputRef.current?.focus();
-           } else {
-             productInputRef.current?.focus();
-           }
-        } else {
-           productInputRef.current?.focus();
-        }
-      }
-    }
-  };
-
-  const handleExtraInputScan = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
-    if (e.key === 'Enter') {
-      // Find the next field in the ACTIVE list
-      const currentActivePos = activeExtraFields.findIndex(f => f.idx === index);
-      
-      if (currentActivePos !== -1 && currentActivePos < activeExtraFields.length - 1) {
-         let nextActivePos = currentActivePos + 1;
-         let nextRealIdx = activeExtraFields[nextActivePos].idx;
-
-         // Try to find the next empty field
-         while (nextActivePos < activeExtraFields.length && additionalValues[activeExtraFields[nextActivePos].idx]) {
-            const isDefaulted = !!currentStageObj?.additionalFieldDefaults?.[activeExtraFields[nextActivePos].idx];
-            if (!isDefaulted) break; // Found a manual field
-            nextActivePos++;
-         }
-
-         if (nextActivePos < activeExtraFields.length) {
-            nextRealIdx = activeExtraFields[nextActivePos].idx;
-            extraInputRefs.current[nextRealIdx]?.focus();
-         } else {
-            productInputRef.current?.focus();
-         }
-
-      } else {
-         // End of list
-         productInputRef.current?.focus();
-      }
-    }
-  };
-
-  const updateAdditionalValue = (index: number, value: string) => {
-    const newValues = [...additionalValues];
-    newValues[index] = value;
-    setAdditionalValues(newValues);
-  };
-
-  const handleError = (message: string, scannedCode: string = '') => {
-    const errorRecord: ScanRecord = {
-      id: crypto.randomUUID(),
-      stt: history.length + 1,
-      productCode: scannedCode || '---',
-      model: currentModel || 'CHƯA CÓ',
-      modelName: modelName || '',
-      employeeId: currentEmployeeId || 'CHƯA CÓ',
-      timestamp: new Date().toISOString(),
-      status: 'error',
-      note: message,
-      stage: currentStage
-    };
-    setHistory(prev => [errorRecord, ...prev]);
-    setErrorModal({ isOpen: true, message });
-  };
-
-  const handleSuccess = (code: string) => {
-    setProductProgress(prev => ({ ...prev, [code]: currentStage }));
-    setProductStatus(prev => ({ ...prev, [code]: 'valid' }));
-
-    const newRecord: ScanRecord = {
-      id: crypto.randomUUID(),
-      stt: history.length + 1,
-      productCode: code,
-      model: currentModel,
-      modelName: modelName,
-      employeeId: currentEmployeeId || 'UNKNOWN',
-      timestamp: new Date().toISOString(),
-      status: 'valid',
-      note: 'Thành công',
-      stage: currentStage,
-      measurement: currentStageObj?.enableMeasurement ? measurementValue : undefined,
-      additionalValues: currentStageObj?.enableMeasurement ? [...additionalValues] : undefined
-    };
-
-    setHistory(prev => [newRecord, ...prev]);
+  const daysInMonth = useMemo(() => {
+    const lastDay = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
     
-    // Reset Inputs
-    setProductInput('');
-    setDefectCode('');
-    setMeasurementValue(''); 
-    
-    // RESET TO DEFAULTS
-    loadDefaults();
-    
-    // Return Focus logic
-    setTimeout(() => {
-        if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-        else productInputRef.current?.focus();
-    }, 50);
-  };
-
-  const handleDefectRecord = (code: string, reason: string) => {
-    setProductStatus(prev => ({ ...prev, [code]: 'defect' }));
-
-    const newRecord: ScanRecord = {
-      id: crypto.randomUUID(),
-      stt: history.length + 1,
-      productCode: code,
-      model: currentModel,
-      modelName: modelName,
-      employeeId: currentEmployeeId || 'UNKNOWN',
-      timestamp: new Date().toISOString(),
-      status: 'defect',
-      note: `Lỗi: ${reason}`,
-      stage: currentStage,
-      measurement: currentStageObj?.enableMeasurement ? measurementValue : undefined,
-      additionalValues: currentStageObj?.enableMeasurement ? [...additionalValues] : undefined
-    };
-
-    setHistory(prev => [newRecord, ...prev]);
-    
-    setProductInput('');
-    setDefectCode(''); 
-    setMeasurementValue('');
-    loadDefaults();
-
-    setTimeout(() => {
-        if (currentStageObj?.enableMeasurement) measurementInputRef.current?.focus();
-        else productInputRef.current?.focus();
-    }, 50);
-  };
-
-  const handleProductScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const code = productInput.trim();
-      if (!code) return;
-
-      // --- VALIDATIONS ---
-
-      // 0. Model Name Check (MANDATORY)
-      if (!modelName.trim()) return handleError("Lỗi: Chưa nhập Tên Model.", code);
-
-      // 3. Employee Check (Must be before logic)
-      if (!currentEmployeeId) return handleError(`Lỗi: Chưa xác định nhân viên cho công đoạn này.`, code);
-
-      // --- CHECK: HEADER "QUICK PLAN" LIST (Optional but if exists, strictly enforced) ---
-      if (currentModel.trim()) {
-         const validPatterns = currentModel.trim().split(/\s+/).map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
-         // Check if contains ANY
-         const isMatch = validPatterns.some(pattern => code.toUpperCase().includes(pattern));
-         if (!isMatch) {
-            return handleError(`Lỗi: Mã không nằm trong "MÃ KIỂM TRA (LIST)" trên header.\nMã quét: ${code}`, code);
-         }
-      }
-
-      // REMOVED: STAGE SPECIFIC VALIDATION RULES (Configurable) Logic
-
-      if (defectCode.trim()) {
-        handleDefectRecord(code, defectCode);
-        return;
-      }
-
-      // MEASUREMENT VALIDATION
-      if (currentStageObj?.enableMeasurement) {
-        const val = measurementValue.trim();
-        if (!val) {
-           measurementInputRef.current?.focus();
-           return handleError(`Lỗi: Công đoạn này yêu cầu nhập ${currentStageObj.measurementLabel || 'giá trị đo'}.`, code);
-        }
-
-        // CHECK AGAINST STANDARD
-        const standard = currentStageObj.measurementStandard?.trim();
-        if (standard) {
-          const stdNum = parseFloat(standard.replace(',', '.'));
-          const valNum = parseFloat(val.replace(',', '.'));
-
-          if (!isNaN(stdNum)) {
-             if (isNaN(valNum)) {
-                return handleError(`Lỗi: Tiêu chuẩn là số (${standard}), vui lòng nhập kết quả là số.`, code);
-             }
-             if (valNum >= stdNum) {
-                return handleError(`LỖI NG: Kết quả đo quá cao!\nTiêu chuẩn (Max): < ${standard}\nThực tế: ${val}`, code);
-             }
-          } else {
-             if (val.toUpperCase() !== standard.toUpperCase()) {
-                return handleError(`LỖI NG: Kết quả đo không đạt chuẩn!\nTiêu chuẩn: ${standard}\nThực tế: ${val}`, code);
-             }
-          }
-        }
-        
-        // Validate Additional Fields and Check Lists
-        for (const field of activeExtraFields) {
-           const fieldVal = additionalValues[field.idx].trim();
-           if (!fieldVal) {
-             extraInputRefs.current[field.idx]?.focus();
-             return handleError(`Lỗi: Chưa nhập giá trị cho "${field.label}".`, code);
-           }
-
-           // Check Validation List (Whitelist) if it exists
-           const whitelistString = currentStageObj.additionalFieldValidationLists?.[field.idx];
-           if (whitelistString && whitelistString.trim()) {
-              const allowedValues = whitelistString.trim().split(/\s+/).map(s => s.toUpperCase());
-              if (allowedValues.length > 0 && !allowedValues.includes(fieldVal.toUpperCase())) {
-                 extraInputRefs.current[field.idx]?.focus();
-                 return handleError(`LỖI: Giá trị "${fieldVal}" không nằm trong danh sách cho phép của "${field.label}".`, code);
-              }
-           }
-        }
-      }
-
-      // LOGIC CHECKS: DUPLICATE
-      const currentProgress = productProgress[code] || 0;
-      
-      // Duplicate check in single stage mode
-      if (currentProgress >= currentStage) {
-        return handleError(`Lỗi: Mã này đã được quét thành công trước đó.`, code);
-      }
-
-      handleSuccess(code);
+    const days = [];
+    for (let i = 0; i < firstDayOfWeek; i++) {
+      days.push(null);
     }
-  };
+    for (let d = 1; d <= lastDay; d++) {
+      days.push(new Date(currentYear, currentMonth, d));
+    }
+    return days;
+  }, [currentYear, currentMonth]);
 
-  const handleCloseError = () => {
-    setErrorModal({ isOpen: false, message: '' });
-    setProductInput('');
-    
-    setTimeout(() => {
-      // Smart Focus recovery
-      if (!modelName.trim()) modelNameRef.current?.focus();
-      else if (!currentModel.trim()) modelInputRef.current?.focus();
-      else if (!currentEmployeeId) employeeInputRef.current?.focus();
-      else if (currentStageObj?.enableMeasurement) {
-         if (!measurementValue) measurementInputRef.current?.focus();
-         else productInputRef.current?.focus(); // Simplified
-      }
-      else productInputRef.current?.focus();
-    }, 50);
-  };
+  const fetchInsight = useCallback(async (date: Date) => {
+    setLoadingInsight(true);
+    setInsight("");
+    try {
+      const lunar = fillLunarGaps(date.getFullYear(), date.getMonth() + 1, date.getDate());
+      const canChiDay = getCanChiDay(getJulianDay(date.getDate(), date.getMonth() + 1, date.getFullYear()));
+      const canChiMonth = getCanChiMonth(lunar.month, lunar.year);
+      const canChiYear = getCanChiYear(lunar.year);
 
-  const exportCSV = useCallback(() => {
-    // 1. Calculate Dynamic Headers based on ALL stages configuration
-    // We create a definition map to know which column pulls from which data index
-    const dynamicColsDef: { header: string, stageId: number, valueIndex: number }[] = [];
+      const prompt = `
+        Tôi đang xem lịch vạn niên cho ngày dương ${date.toLocaleDateString('vi-VN')}.
+        Ngày âm tương ứng là ngày ${lunar.day} tháng ${lunar.month}${lunar.leap ? ' nhuận' : ''} năm ${canChiYear}.
+        Can chi: Ngày ${canChiDay}, Tháng ${canChiMonth}, Năm ${canChiYear}.
+        Hãy cho tôi biết ngắn gọn (khoảng 100 từ):
+        1. Ý nghĩa của ngày này theo phong thủy Việt Nam.
+        2. Đây có phải là ngày tốt để làm việc gì (khai trương, cưới hỏi, xuất hành...)?
+        3. Một câu danh ngôn hoặc lời khuyên tích cực cho ngày này.
+        Trả lời theo phong cách ấm áp, truyền thống bằng tiếng Việt.
+      `;
 
-    stages.forEach(stage => {
-        // Only consider stages that have at least one label configured
-        if (stage.additionalFieldLabels?.some(l => l && l.trim())) {
-             stage.additionalFieldLabels.forEach((label, idx) => {
-                 if (label && label.trim()) {
-                     dynamicColsDef.push({
-                         header: `${label}`, // Removed stage name prefix since it is single stage
-                         stageId: stage.id,
-                         valueIndex: idx
-                     });
-                 }
-             });
-        }
-    });
-
-    // 2. Prepare full Header row
-    const headers = [
-        "STT", 
-        "Mã IMEI máy", 
-        "Tên Model", 
-        "Mã Kiểm Tra (IMEI)", 
-        "Kết quả chính", 
-        ...dynamicColsDef.map(d => d.header), // The expanded dynamic columns
-        "Nhân Viên", 
-        "Thời Gian", 
-        "Trạng Thái", 
-        "Ghi Chú"
-    ];
-    
-    // 3. Map Data Rows
-    const rows = history.map(item => {
-      
-      let statusText = 'LỖI';
-      if (item.status === 'valid') statusText = 'OK';
-      if (item.status === 'defect') statusText = 'NG (Hàng Lỗi)';
-      
-      // Map the dynamic columns
-      const dynamicCells = dynamicColsDef.map(def => {
-          // Only fill data if the record belongs to the column's stage
-          if (item.stage === def.stageId) {
-              return item.additionalValues?.[def.valueIndex] || "-";
-          }
-          return ""; // Empty cell for irrelevant stages
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
       });
 
-      return [
-        item.stt,
-        item.productCode,
-        item.modelName || '',
-        item.model,
-        item.measurement || '-',
-        ...dynamicCells,
-        item.employeeId,
-        format(new Date(item.timestamp), 'yyyy-MM-dd HH:mm:ss'),
-        statusText,
-        item.note || ''
-      ];
-    });
-
-    const csvContent = [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `scan_process_data_${format(new Date(), 'yyyyMMdd_HHmmss')}.csv`);
-    link.click();
-  }, [history, stages]);
-
-  const resetSession = () => {
-    if (confirm("CẢNH BÁO: Hành động này sẽ xóa toàn bộ lịch sử và tiến độ sản xuất hiện tại. Bạn có chắc không?")) {
-      setHistory([]);
-      setProductProgress({});
-      setProductStatus({});
-      setStageEmployees({});
-      setStats({ success: 0, defect: 0, error: 0 });
-      setProductInput('');
-      setDefectCode('');
-      setMeasurementValue('');
-      // Keep model settings? User might want to reset all.
-      // But typically setup params stay.
-      loadDefaults();
-      employeeInputRef.current?.focus();
+      setInsight(response.text || "Không có thông tin cho ngày này.");
+    } catch (error) {
+      console.error("Error fetching insight:", error);
+      setInsight("Hiện không thể kết nối với trí tuệ nhân tạo để lấy thông tin chi tiết.");
+    } finally {
+      setLoadingInsight(false);
     }
+  }, [ai]);
+
+  useEffect(() => {
+    fetchInsight(selectedDate);
+  }, [selectedDate, fetchInsight]);
+
+  const handlePrevMonth = () => {
+    const newDate = new Date(currentYear, currentMonth - 1, 1);
+    if (newDate.getFullYear() >= 2026 || (newDate.getFullYear() === 2025 && newDate.getMonth() >= 11)) {
+        setCurrentDate(newDate);
+    }
+  };
+
+  const handleNextMonth = () => {
+    const newDate = new Date(currentYear, currentMonth + 1, 1);
+    if (newDate.getFullYear() <= 2026) {
+        setCurrentDate(newDate);
+    }
+  };
+
+  function getJulianDay(d: number, m: number, y: number): number {
+    const a = Math.floor((14 - m) / 12);
+    const year = y + 4800 - a;
+    const month = m + 12 * a - 3;
+    return d + Math.floor((153 * month + 2) / 5) + 365 * year + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400) - 32045;
+  }
+
+  const selectedLunar = fillLunarGaps(selectedDate.getFullYear(), selectedDate.getMonth() + 1, selectedDate.getDate());
+  const selectedCanChiDay = getCanChiDay(getJulianDay(selectedDate.getDate(), selectedDate.getMonth() + 1, selectedDate.getFullYear()));
+
+  /**
+   * Safe holiday detection using local date parts to avoid timezone shifts from toISOString()
+   */
+  const isHoliday = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    return HOLIDAYS_2026.includes(dateStr);
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-100 font-sans">
-      {/* Header */}
-      <header className="bg-slate-900 text-white p-3 shadow-lg sticky top-0 z-20">
-        <div className="w-full px-2 flex flex-col md:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg shadow-blue-500/50 shadow-lg">
-              <ScanLine size={24} />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">ProScan Single Station</h1>
-              <p className="text-slate-400 text-[10px] uppercase tracking-wider">Ver 4.1 (Unified)</p>
-            </div>
-          </div>
-          
-          <div className="flex flex-col md:flex-row items-center gap-2 w-full md:w-auto">
-             
-             {/* New: Actual Model Name */}
-             <div className="flex items-center bg-slate-800 rounded px-2 py-1 border border-slate-700">
-                 <Tag size={14} className="text-slate-400 mr-2" />
-                 <input
-                    ref={modelNameRef}
-                    type="text"
-                    className="bg-transparent text-white border-none focus:ring-0 text-sm font-bold py-1 w-32 placeholder-slate-500 uppercase"
-                    placeholder="NHẬP TÊN MODEL"
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                  />
-             </div>
-
-             {/* Existing: Model/IMEI Validation with Upload */}
-             <div className="flex items-center bg-slate-800 rounded px-2 py-1 border border-slate-700">
-                 <Settings size={14} className="text-slate-400 mr-2" />
-                 <div className="flex items-center">
-                    <input
-                        ref={modelInputRef}
-                        type="text"
-                        className="bg-transparent text-white border-none focus:ring-0 text-sm font-bold py-1 w-32 placeholder-slate-500 uppercase"
-                        placeholder="MÃ KIỂM TRA (LIST)"
-                        title="Nhập danh sách mã hợp lệ (cách nhau bởi khoảng trắng) HOẶC upload file Excel"
-                        value={currentModel}
-                        onChange={(e) => setCurrentModel(e.target.value.toUpperCase())}
-                      />
-                      <label className="cursor-pointer hover:bg-slate-600 p-1 rounded transition-colors ml-1" title="Upload Excel (Cột A)">
-                        <Upload size={14} className="text-green-400" />
-                        <input 
-                          type="file" 
-                          className="hidden" 
-                          accept=".xlsx, .xls, .csv" 
-                          onChange={handleFileUpload}
-                        />
-                      </label>
-                 </div>
-             </div>
-
-             {/* Progress Counter */}
-             {planList.length > 0 && (
-                 <div className="flex items-center bg-slate-800 rounded px-2 py-1 border border-slate-700 h-9 animate-in fade-in" title="Tiến độ quét theo danh sách đã nhập">
-                     <div className="flex flex-col items-end mr-2 leading-none justify-center h-full">
-                         <span className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">Tiến độ</span>
-                     </div>
-                     <div className="flex items-baseline gap-1">
-                        <span className={`text-lg font-black font-mono leading-none ${validScanCount >= planList.length ? 'text-green-400' : 'text-yellow-400'}`}>
-                          {validScanCount}
-                        </span>
-                        <span className="text-slate-600 font-light text-xs">/</span>
-                        <span className="text-xs font-bold text-slate-300 font-mono leading-none">{planList.length}</span>
-                     </div>
-                 </div>
-             )}
-             
-             <div className="flex items-center gap-1">
-                <Button onClick={() => setIsSettingsOpen(true)} className="text-xs p-2 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Cấu hình công đoạn">
-                  <Edit size={14} />
-                </Button>
-                
-                <Button onClick={toggleFullScreen} className="text-xs p-2 bg-slate-700 hover:bg-slate-600 border border-slate-600" title="Toàn màn hình">
-                    {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
-                </Button>
-
-                <Button onClick={exportCSV} variant="success" className="text-xs py-2 px-3">
-                  <Download size={14} className="mr-1 inline" /> Excel
-                </Button>
-                <Button onClick={resetSession} variant="secondary" className="text-xs py-2 px-3">
-                  <RefreshCw size={14} className="mr-1 inline" /> Reset
-                </Button>
-             </div>
-          </div>
-        </div>
+    <div className="min-h-screen pb-12">
+      {/* Header section */}
+      <header className="bg-calendar-red text-white p-6 shadow-xl text-center">
+        <h1 className="text-3xl font-serif mb-1">Lịch Vạn Niên 2026</h1>
+        <p className="opacity-80 uppercase tracking-widest text-sm">Năm Bính Ngọ - Thiên Thượng Hỏa</p>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 p-4 md:p-6 w-full grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* LEFT: INPUTS & STATS */}
-          <div className="lg:col-span-1 space-y-4">
-            
-            {/* 1. Stage Info Card */}
-            <div className="bg-blue-600 text-white p-4 rounded-lg shadow-md flex flex-col justify-center">
-                <h3 className="text-[10px] uppercase font-bold opacity-70 mb-1">CÔNG ĐOẠN LÀM VIỆC</h3>
-                <div className="text-lg font-bold flex items-center gap-2 truncate">
-                    <Layers size={20} /> <span className="truncate">{currentStageObj?.name || `Trạm kiểm tra`}</span>
-                </div>
-                {currentEmployeeId && (
-                    <div className="mt-1 text-xs bg-blue-700/50 p-0.5 px-2 rounded inline-block w-fit">
-                        NV: <b>{currentEmployeeId}</b>
-                    </div>
-                )}
+      <main className="max-w-4xl mx-auto mt-8 px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
+        
+        {/* Left Side: Monthly Calendar */}
+        <div className="md:col-span-2 bg-white rounded-lg shadow-lg overflow-hidden border-t-8 border-calendar-red">
+          <div className="p-4 flex justify-between items-center bg-gray-50 border-b">
+            <button 
+              onClick={handlePrevMonth}
+              className="p-2 hover:bg-gray-200 rounded-full transition-colors text-calendar-red font-bold"
+            >
+              &larr; Tháng trước
+            </button>
+            <div className="text-center">
+              <h2 className="text-xl font-bold text-gray-800 uppercase">Tháng {currentMonth + 1} / {currentYear}</h2>
             </div>
+            <button 
+              onClick={handleNextMonth}
+              className="p-2 hover:bg-gray-200 rounded-full transition-colors text-calendar-red font-bold"
+            >
+              Tháng sau &rarr;
+            </button>
+          </div>
 
-            {/* 2. Stats Grid (3 Cards) */}
-            <div className="grid grid-cols-3 gap-3">
-                <StatCard 
-                  title="OK" 
-                  value={validScanCount} 
-                  type="success" 
-                  icon={<CheckCircle size={20} />} 
-                />
-                <StatCard 
-                  title="NG" 
-                  value={defectScanCount} 
-                  type="danger" 
-                  icon={<XCircle size={20} />} 
-                />
-                <StatCard 
-                  title="SYSTEM ERR" 
-                  value={errorScanCount} 
-                  type="neutral" 
-                  icon={<AlertCircle size={20} />} 
-                />
-            </div>
+          <div className="calendar-grid bg-gray-100 border-b">
+            {WEEKDAYS.map((day, idx) => (
+              <div key={idx} className={`text-center py-2 text-xs font-bold uppercase ${idx === 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                {day}
+              </div>
+            ))}
+          </div>
 
-            {/* 3. Scan Form */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-               <div className="p-3 bg-gray-50 border-b border-gray-200 font-bold text-gray-700 flex items-center gap-2 text-sm uppercase tracking-wide">
-                 <ScanLine size={16} /> QUÉT MÃ
-               </div>
-               <div className="p-4 space-y-5">
-                  {/* Employee */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-600 mb-1">
-                      1. Nhân viên
-                    </label>
-                    <div className="relative">
-                      <input
-                        ref={employeeInputRef}
-                        className={`w-full text-base p-2.5 pl-9 border rounded focus:outline-none transition-colors ${currentEmployeeId ? 'border-green-300 bg-green-50 focus:border-green-500' : 'border-gray-300 focus:border-blue-500'}`}
-                        placeholder={currentEmployeeId ? "Đổi nhân viên..." : "Scan mã NV để bắt đầu..."}
-                        value={employeeInput}
-                        onChange={e => setEmployeeInput(e.target.value)}
-                        onKeyDown={handleEmployeeScan}
-                      />
-                      <Users className="absolute left-2.5 top-3 text-gray-400" size={18} />
-                      {currentEmployeeId && (
-                        <div className="absolute right-2 top-2.5 text-green-700 font-bold text-[10px] bg-green-200 px-1.5 py-0.5 rounded border border-green-300">
-                          {currentEmployeeId}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <hr className="border-gray-100"/>
+          <div className="calendar-grid bg-white">
+            {daysInMonth.map((date, idx) => {
+              if (!date) return <div key={`empty-${idx}`} className="h-24 md:h-28 border-r border-b bg-gray-50"></div>;
+              
+              const isSelected = selectedDate.getTime() === date.getTime();
+              const isToday = new Date().toDateString() === date.toDateString();
+              const lunar = fillLunarGaps(date.getFullYear(), date.getMonth() + 1, date.getDate());
+              const isFirstOrFull = lunar.day === 1 || lunar.day === 15;
+              const isSunday = date.getDay() === 0;
+              const isSpecialHoliday = isHoliday(date);
 
-                   {/* Defect Code Input */}
-                   <div className="bg-amber-50 p-2.5 rounded-md border border-amber-200">
-                    <label className="block text-xs font-bold text-amber-700 mb-1 flex items-center gap-1">
-                      <AlertTriangle size={12} />
-                      2. Mã Lỗi (Tùy chọn - Scan khi hàng NG)
-                    </label>
-                    <input
-                      ref={defectInputRef}
-                      className="w-full text-base p-2 border border-amber-300 rounded focus:border-amber-500 focus:outline-none placeholder-amber-300/70 bg-white"
-                      placeholder="Scan mã lỗi (Ví dụ: NG01)..."
-                      value={defectCode}
-                      onChange={e => setDefectCode(e.target.value)}
-                      onKeyDown={handleDefectScan}
-                    />
-                  </div>
+              // Styling logic based on user request
+              let bgColor = 'bg-white';
+              if (isSelected) {
+                bgColor = 'bg-red-50';
+              } else if (isSpecialHoliday) {
+                bgColor = 'bg-red-100'; // Đỏ nhạt cho lễ tết
+              } else if (isSunday) {
+                bgColor = 'bg-yellow-100'; // Màu vàng cho chủ nhật
+              }
 
-                  <hr className="border-gray-100"/>
-
-                  {/* Measurement Input (CONDITIONAL) */}
-                  {currentStageObj?.enableMeasurement && (
-                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 space-y-3">
-                      {/* Main Measurement */}
-                      <div>
-                        <label className="block text-xs font-bold text-purple-700 mb-1 flex items-center gap-1">
-                          <Activity size={14} className="text-purple-600"/>
-                          3. Nhập {currentStageObj.measurementLabel || "Kết quả Test"} (Bắt buộc)
-                        </label>
-                        <input
-                          ref={measurementInputRef}
-                          className="w-full text-base p-2.5 border-2 border-purple-300 bg-purple-50 rounded focus:border-purple-500 focus:outline-none placeholder-purple-300"
-                          placeholder={currentStageObj.measurementStandard ? `Nhập giá trị (Chuẩn: ${currentStageObj.measurementStandard})...` : `Nhập ${currentStageObj.measurementLabel || "giá trị"}...`}
-                          value={measurementValue}
-                          onChange={e => setMeasurementValue(e.target.value)}
-                          onKeyDown={handleMeasurementScan}
-                        />
-                      </div>
-
-                      {/* 8 Extra Fields (Grid) */}
-                      {activeExtraFields.length > 0 && (
-                        <div className="bg-gray-50 p-2 rounded border border-gray-200">
-                           <label className="block text-[10px] font-bold text-gray-500 mb-2 uppercase flex items-center gap-1">
-                             <List size={10}/> Thông số mở rộng
-                           </label>
-                           {/* Updated Grid for 8 items: 2 cols */}
-                           <div className="grid grid-cols-2 gap-2">
-                              {activeExtraFields.map((field) => (
-                                <div key={field.idx}>
-                                   <label className="block text-[9px] font-bold text-gray-500 mb-0.5 truncate" title={field.label}>
-                                      {field.label}
-                                   </label>
-                                   <input
-                                      ref={(el) => { extraInputRefs.current[field.idx] = el; }}
-                                      value={additionalValues[field.idx]}
-                                      onChange={(e) => updateAdditionalValue(field.idx, e.target.value)}
-                                      onKeyDown={(e) => handleExtraInputScan(e, field.idx)}
-                                      className="w-full p-1.5 text-xs border border-gray-300 rounded focus:border-purple-500 focus:ring-1 focus:ring-purple-200 outline-none"
-                                      placeholder={currentStageObj.additionalFieldDefaults?.[field.idx] ? "(Mặc định)" : "..."}
-                                   />
-                                </div>
-                              ))}
-                           </div>
-                        </div>
-                      )}
+              return (
+                <div 
+                  key={date.toISOString()} 
+                  onClick={() => setSelectedDate(date)}
+                  className={`h-24 md:h-28 border-r border-b p-1 flex flex-col items-center justify-center cursor-pointer transition-all relative
+                    ${bgColor}
+                    ${isSelected ? 'ring-2 ring-calendar-red ring-inset z-10 shadow-inner' : 'hover:bg-opacity-80'}
+                  `}
+                >
+                  <span className={`text-xl md:text-2xl font-bold ${isSunday || isSpecialHoliday ? 'text-red-600' : 'text-gray-800'}`}>
+                    {date.getDate()}
+                  </span>
+                  <span className={`text-[10px] md:text-xs font-medium mt-1 ${isFirstOrFull || isSpecialHoliday ? 'text-red-600 font-bold' : 'text-gray-500'}`}>
+                    {lunar.day === 1 ? `${lunar.day}/${lunar.month}` : lunar.day}
+                  </span>
+                  {isToday && (
+                    <div className="absolute top-1 right-1 w-2 h-2 bg-calendar-red rounded-full"></div>
+                  )}
+                  {isSpecialHoliday && (
+                    <div className="absolute bottom-1 right-1 text-[8px] text-red-600 font-bold opacity-60 uppercase hidden md:block">
+                      Tết/Lễ
                     </div>
                   )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-                  {/* Product */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-600 mb-1">
-                      {currentStageObj?.enableMeasurement ? "4" : "3"}. Mã IMEI máy (Enter)
-                    </label>
-                    <div className="relative">
-                      <input
-                        ref={productInputRef}
-                        disabled={errorModal.isOpen}
-                        className={`w-full text-lg font-mono p-3 pl-9 border rounded shadow-inner focus:outline-none transition-colors
-                          ${errorModal.isOpen 
-                            ? 'bg-gray-100 cursor-not-allowed border-gray-300' 
-                            : defectCode 
-                              ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-100'
-                              : 'bg-white border-blue-600 ring-2 ring-blue-50/50'}
-                        `}
-                        placeholder={
-                          !modelName ? "⚠️ Nhập Tên Model trước" :
-                          (!currentModel) ? "⚠️ Nhập Mã Kiểm Tra (IMEI)" :
-                          !currentEmployeeId ? "⚠️ Quét nhân viên trước" :
-                          defectCode ? "⚠️ SẮP GHI LỖI NG..." :
-                          "Sẵn sàng scan IMEI..."
-                        }
-                        value={productInput}
-                        onChange={e => setProductInput(e.target.value)}
-                        onKeyDown={handleProductScan}
-                      />
-                      <Box className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${currentEmployeeId && currentModel && modelName ? (defectCode ? 'text-amber-600' : 'text-blue-600') : 'text-gray-400'}`} size={20} />
-                    </div>
-                  </div>
-               </div>
+        {/* Right Side: Detail Panel */}
+        <div className="flex flex-col gap-6">
+          <div className="bg-white rounded-lg shadow-lg border-t-8 border-yellow-500 overflow-hidden">
+            <div className="p-6 text-center bg-yellow-50">
+              <p className="text-gray-500 uppercase tracking-wider text-xs mb-2">Thông tin chi tiết</p>
+              <div className="text-6xl font-serif text-calendar-red mb-2">{selectedDate.getDate()}</div>
+              <p className="text-gray-700 font-medium">{MONTHS_VN[selectedDate.getMonth()]} năm {selectedDate.getFullYear()}</p>
+              <div className="mt-4 border-t border-yellow-200 pt-4">
+                <p className="text-sm text-gray-500 italic">Âm lịch</p>
+                <div className="text-xl font-bold text-gray-800">
+                  Ngày {selectedLunar.day} tháng {selectedLunar.month}{selectedLunar.leap ? ' (Nhuận)' : ''}
+                </div>
+                <p className="text-sm text-gray-600 mt-1 uppercase font-semibold">
+                  Năm {getCanChiYear(selectedLunar.year)}
+                </p>
+              </div>
+            </div>
+            
+            <div className="p-4 bg-gray-50 text-xs flex justify-around border-t border-gray-100">
+              <div className="text-center">
+                <span className="block text-gray-400">Can chi ngày</span>
+                <span className="font-bold text-gray-700">{selectedCanChiDay}</span>
+              </div>
+              <div className="text-center">
+                <span className="block text-gray-400">Can chi tháng</span>
+                <span className="font-bold text-gray-700">{getCanChiMonth(selectedLunar.month, selectedLunar.year)}</span>
+              </div>
             </div>
           </div>
 
-          {/* RIGHT: HISTORY TABLE */}
-          <div className="lg:col-span-2 h-[calc(100vh-200px)] min-h-[500px]">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 h-full flex flex-col">
-               <div className="p-3 border-b border-gray-200 bg-gray-50 flex justify-between items-center rounded-t-lg">
-                  <h3 className="font-bold text-gray-700 text-sm">Lịch sử Scan</h3>
-                  <div className="text-xs flex gap-3 font-medium">
-                    <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-green-500"></div> OK</span>
-                    <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-500"></div> NG</span>
-                    <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500"></div> Err</span>
-                  </div>
-               </div>
-               
-               <div className="flex-1 overflow-auto">
-                 <table className="w-full text-left text-sm">
-                   <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10 shadow-sm border-b border-gray-200">
-                     <tr>
-                       <th className="p-3 font-semibold w-12 text-center">STT</th>
-                       <th className="p-3 font-semibold">Mã IMEI máy</th>
-                       <th className="p-3 font-semibold text-blue-700">Tên Model</th>
-                       <th className="p-3 font-semibold">Kết quả đo</th>
-                       <th className="p-3 font-semibold">Nhân Viên</th>
-                       <th className="p-3 font-semibold">Trạng Thái</th>
-                     </tr>
-                   </thead>
-                   <tbody className="divide-y divide-gray-100">
-                     {history.length === 0 ? (
-                       <tr><td colSpan={6} className="p-10 text-center text-gray-400 italic">Chưa có dữ liệu</td></tr>
-                     ) : (
-                       history.map((row) => {
-                         const rowStageObj = stages.find(s => s.id === row.stage);
-                         
-                         let rowClass = "";
-                         if (row.status === 'valid') rowClass = "border-l-4 border-l-green-500 hover:bg-gray-50";
-                         else if (row.status === 'defect') rowClass = "border-l-4 border-l-amber-500 bg-amber-50 hover:bg-amber-100";
-                         else rowClass = "border-l-4 border-l-red-500 bg-red-50 hover:bg-red-100";
-                         
-                         // Helper to render extended values cleanly
-                         const renderExtended = () => {
-                           if (!row.additionalValues || row.additionalValues.every(v => !v)) return null;
-                           // Only show values that correspond to configured labels (if we can find the stage config)
-                           return (
-                             <div className="mt-1 flex flex-wrap gap-1">
-                               {row.additionalValues.map((v, i) => {
-                                 if (!v) return null;
-                                 const label = rowStageObj?.additionalFieldLabels?.[i];
-                                 return (
-                                   <span key={i} className="text-[10px] bg-purple-50 text-purple-700 px-1 rounded border border-purple-100 whitespace-nowrap">
-                                     {label ? `${label}: ` : ''}<b>{v}</b>
-                                   </span>
-                                 )
-                               })}
-                             </div>
-                           )
-                         };
-
-                         return (
-                           <tr key={row.id} className={rowClass}>
-                             <td className="p-3 text-gray-500 text-center">{row.stt}</td>
-                             <td className={`p-3 font-mono font-medium ${row.status === 'error' ? 'text-red-700 line-through' : row.status === 'defect' ? 'text-amber-800' : 'text-blue-700'}`}>
-                               {row.productCode}
-                             </td>
-                             <td className="p-3 font-bold text-gray-700">
-                               {row.modelName || <span className="text-gray-300">-</span>}
-                             </td>
-                             <td className="p-3">
-                                <div className="font-medium text-purple-700">{row.measurement || '-'}</div>
-                                {renderExtended()}
-                             </td>
-                             <td className="p-3 text-gray-900">{row.employeeId}</td>
-                             <td className="p-3">
-                               {row.status === 'valid' ? (
-                                 <div className="text-xs text-gray-500 flex items-center gap-1">
-                                   <CheckCircle size={12} className="text-green-500"/>
-                                   {format(new Date(row.timestamp), 'HH:mm:ss')}
-                                 </div>
-                               ) : row.status === 'defect' ? (
-                                  <span className="text-amber-700 font-bold text-xs flex items-center gap-1">
-                                   <XCircle size={12}/> {row.note}
-                                 </span>
-                               ) : (
-                                 <span className="text-red-600 font-bold text-xs flex items-center gap-1">
-                                   <AlertTriangle size={12}/> {row.note}
-                                 </span>
-                               )}
-                             </td>
-                           </tr>
-                         );
-                       })
-                     )}
-                   </tbody>
-                 </table>
-               </div>
-            </div>
+          <div className="bg-white rounded-lg shadow-lg p-5 border-l-4 border-calendar-red relative min-h-[200px]">
+            <h3 className="text-lg font-bold text-calendar-red flex items-center gap-2 mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              Luận giải Gemini
+            </h3>
+            
+            {loadingInsight ? (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 opacity-50">
+                <div className="w-8 h-8 border-4 border-calendar-red border-t-transparent rounded-full animate-spin"></div>
+                <p className="text-sm italic">Đang xin quẻ ngày...</p>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
+                {insight}
+              </div>
+            )}
           </div>
+        </div>
       </main>
 
-      <ErrorModal isOpen={errorModal.isOpen} message={errorModal.message} onClose={handleCloseError} />
-
-      <StageSettingsModal 
-        isOpen={isSettingsOpen}
-        stages={stages}
-        onSave={setStages}
-        onClose={() => setIsSettingsOpen(false)}
-      />
+      <footer className="mt-12 text-center text-gray-500 text-sm">
+        <p>© 2026 Lịch Vạn Niên Bính Ngọ - Thiết kế bởi Chuyên gia AI</p>
+      </footer>
     </div>
   );
-}
+};
+
+export default App;
