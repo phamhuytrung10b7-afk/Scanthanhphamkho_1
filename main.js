@@ -10,7 +10,7 @@ function createWindow() {
     },
   });
 
-  // Chỉ định file index.html từ thư mục dist đã build
+  // Khi build xong, Electron sẽ đọc file trong thư mục dist
   win.loadFile(path.join(__dirname, 'dist/index.html'));
 }
 

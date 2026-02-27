@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, X, Activity, ListPlus, CheckSquare, Upload, Trash2 } from 'lucide-react';
+import { Save, X, Activity, ListPlus, CheckSquare, Upload, Trash2, ArrowRightLeft } from 'lucide-react';
 import { read, utils } from 'xlsx';
 import { Button } from './Button';
 import { Stage } from './types';
@@ -28,6 +28,8 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
       additionalFieldLabels: ensureSize8(s.additionalFieldLabels),
       additionalFieldDefaults: ensureSize8(s.additionalFieldDefaults),
       additionalFieldValidationLists: ensureSize8(s.additionalFieldValidationLists),
+      additionalFieldMins: ensureSize8(s.additionalFieldMins),
+      additionalFieldMaxs: ensureSize8(s.additionalFieldMaxs),
       validationRules: s.validationRules || []
     }));
     setLocalStages(sanitizedStages);
@@ -49,17 +51,27 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
     setLocalStages(prev => prev.map(s => s.id === id ? { ...s, measurementStandard: newVal } : s));
   };
 
-  const handleAdditionalFieldConfig = (stageId: number, fieldIndex: number, type: 'label' | 'default', value: string) => {
+  const handleAdditionalFieldConfig = (stageId: number, fieldIndex: number, type: 'label' | 'default' | 'min' | 'max', value: string) => {
     setLocalStages(prev => prev.map(s => {
       if (s.id !== stageId) return s;
       
       const newLabels = ensureSize8(s.additionalFieldLabels);
       const newDefaults = ensureSize8(s.additionalFieldDefaults);
+      const newMins = ensureSize8(s.additionalFieldMins);
+      const newMaxs = ensureSize8(s.additionalFieldMaxs);
 
       if (type === 'label') newLabels[fieldIndex] = value;
       if (type === 'default') newDefaults[fieldIndex] = value;
+      if (type === 'min') newMins[fieldIndex] = value;
+      if (type === 'max') newMaxs[fieldIndex] = value;
 
-      return { ...s, additionalFieldLabels: newLabels, additionalFieldDefaults: newDefaults };
+      return { 
+        ...s, 
+        additionalFieldLabels: newLabels, 
+        additionalFieldDefaults: newDefaults,
+        additionalFieldMins: newMins,
+        additionalFieldMaxs: newMaxs
+      };
     }));
   };
 
@@ -240,6 +252,30 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
                                       className="w-full p-1.5 text-xs border border-green-200 bg-green-50 rounded focus:border-green-500 focus:outline-none placeholder-green-200"
                                       placeholder="Auto..."
                                     />
+                                  </div>
+
+                                  {/* Min / Max Row */}
+                                  <div className="grid grid-cols-2 gap-1.5">
+                                      <div>
+                                        <label className="text-[9px] font-semibold text-gray-400 uppercase flex items-center gap-0.5"><ArrowRightLeft size={8}/> Min</label>
+                                        <input
+                                          type="text" // Keep as text to allow flexible input, validation on save/scan
+                                          value={stage.additionalFieldMins?.[idx] || ""}
+                                          onChange={(e) => handleAdditionalFieldConfig(stage.id, idx, 'min', e.target.value)}
+                                          className="w-full p-1 text-[10px] border border-dashed border-gray-300 rounded focus:border-blue-500 focus:outline-none"
+                                          placeholder="Min..."
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="text-[9px] font-semibold text-gray-400 uppercase flex items-center gap-0.5"><ArrowRightLeft size={8}/> Max</label>
+                                        <input
+                                          type="text"
+                                          value={stage.additionalFieldMaxs?.[idx] || ""}
+                                          onChange={(e) => handleAdditionalFieldConfig(stage.id, idx, 'max', e.target.value)}
+                                          className="w-full p-1 text-[10px] border border-dashed border-gray-300 rounded focus:border-blue-500 focus:outline-none"
+                                          placeholder="Max..."
+                                        />
+                                      </div>
                                   </div>
 
                                   {/* List Upload Row */}

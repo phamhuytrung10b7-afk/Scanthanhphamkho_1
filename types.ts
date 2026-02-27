@@ -43,6 +43,8 @@ export interface Stage {
   additionalFieldLabels?: string[]; // Labels for 8 custom fields. Empty string = disabled.
   additionalFieldDefaults?: string[]; // New: Default values for the 8 fields.
   additionalFieldValidationLists?: string[]; // New: Whitelists for the 8 fields (string data).
+  additionalFieldMins?: string[]; // New: Min values for range check
+  additionalFieldMaxs?: string[]; // New: Max values for range check
   validationRules?: ValidationRule[]; // New: List of flexible validation rules
 }
 
@@ -59,6 +61,8 @@ export const DEFAULT_PROCESS_STAGES: Stage[] = [
     additionalFieldLabels: [...EMPTY_8], 
     additionalFieldDefaults: [...EMPTY_8],
     additionalFieldValidationLists: [...EMPTY_8],
+    additionalFieldMins: [...EMPTY_8],
+    additionalFieldMaxs: [...EMPTY_8],
     validationRules: []
   }
 ];
