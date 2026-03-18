@@ -14,22 +14,22 @@ interface StageSettingsModalProps {
 export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, stages, onSave, onClose }) => {
   const [localStages, setLocalStages] = useState<Stage[]>(stages);
 
-  // Helper to ensure array is size 8
-  const ensureSize8 = (arr?: string[]) => {
+  // Helper to ensure array is size 16
+  const ensureSize16 = (arr?: string[]) => {
     const newArr = arr ? [...arr] : [];
-    while (newArr.length < 8) newArr.push("");
-    return newArr.slice(0, 8);
+    while (newArr.length < 16) newArr.push("");
+    return newArr.slice(0, 16);
   };
 
   useEffect(() => {
     // Ensure compatibility with data structure
     const sanitizedStages = stages.map(s => ({
       ...s,
-      additionalFieldLabels: ensureSize8(s.additionalFieldLabels),
-      additionalFieldDefaults: ensureSize8(s.additionalFieldDefaults),
-      additionalFieldValidationLists: ensureSize8(s.additionalFieldValidationLists),
-      additionalFieldMins: ensureSize8(s.additionalFieldMins),
-      additionalFieldMaxs: ensureSize8(s.additionalFieldMaxs),
+      additionalFieldLabels: ensureSize16(s.additionalFieldLabels),
+      additionalFieldDefaults: ensureSize16(s.additionalFieldDefaults),
+      additionalFieldValidationLists: ensureSize16(s.additionalFieldValidationLists),
+      additionalFieldMins: ensureSize16(s.additionalFieldMins),
+      additionalFieldMaxs: ensureSize16(s.additionalFieldMaxs),
       validationRules: s.validationRules || []
     }));
     setLocalStages(sanitizedStages);
@@ -55,10 +55,10 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
     setLocalStages(prev => prev.map(s => {
       if (s.id !== stageId) return s;
       
-      const newLabels = ensureSize8(s.additionalFieldLabels);
-      const newDefaults = ensureSize8(s.additionalFieldDefaults);
-      const newMins = ensureSize8(s.additionalFieldMins);
-      const newMaxs = ensureSize8(s.additionalFieldMaxs);
+      const newLabels = ensureSize16(s.additionalFieldLabels);
+      const newDefaults = ensureSize16(s.additionalFieldDefaults);
+      const newMins = ensureSize16(s.additionalFieldMins);
+      const newMaxs = ensureSize16(s.additionalFieldMaxs);
 
       if (type === 'label') newLabels[fieldIndex] = value;
       if (type === 'default') newDefaults[fieldIndex] = value;
@@ -102,7 +102,7 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
 
       setLocalStages(prev => prev.map(s => {
         if (s.id !== stageId) return s;
-        const newLists = ensureSize8(s.additionalFieldValidationLists);
+        const newLists = ensureSize16(s.additionalFieldValidationLists);
         newLists[fieldIndex] = resultString;
         return { ...s, additionalFieldValidationLists: newLists };
       }));
@@ -118,7 +118,7 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
   const clearFieldList = (stageId: number, fieldIndex: number) => {
       setLocalStages(prev => prev.map(s => {
         if (s.id !== stageId) return s;
-        const newLists = ensureSize8(s.additionalFieldValidationLists);
+        const newLists = ensureSize16(s.additionalFieldValidationLists);
         newLists[fieldIndex] = "";
         return { ...s, additionalFieldValidationLists: newLists };
       }));
@@ -214,15 +214,15 @@ export const StageSettingsModal: React.FC<StageSettingsModalProps> = ({ isOpen, 
                         </div>
                       </div>
 
-                      {/* 8 Additional Fields */}
+                      {/* 16 Additional Fields */}
                       <div className="md:col-span-2 lg:col-span-1">
                          <label className="block text-xs font-bold text-gray-700 uppercase mb-3 flex items-center gap-2">
-                           <ListPlus size={16}/> 2. Cấu hình 8 thông số mở rộng
+                           <ListPlus size={16}/> 2. Cấu hình 16 thông số mở rộng
                          </label>
                          
-                         <div className="grid grid-cols-2 gap-3">
-                            {/* Loop 8 times */}
-                            {Array.from({ length: 8 }).map((_, idx) => {
+                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                            {/* Loop 16 times */}
+                            {Array.from({ length: 16 }).map((_, idx) => {
                               const listContent = stage.additionalFieldValidationLists?.[idx] || "";
                               const count = listContent ? listContent.split(/\s+/).filter(s => s).length : 0;
 

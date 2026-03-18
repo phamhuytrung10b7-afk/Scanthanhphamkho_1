@@ -19,7 +19,7 @@ export interface ScanRecord {
   note?: string; 
   stage: number; // The stage where this scan happened (1-5)
   measurement?: string; // Recorded value (e.g. "12V", "PASS", "0.5kg")
-  additionalValues?: string[]; // Values for the 8 custom fields
+  additionalValues?: string[]; // Values for the 16 custom fields
 }
 
 export interface Stats {
@@ -40,16 +40,16 @@ export interface Stage {
   enableMeasurement?: boolean; // Does this stage require a measurement?
   measurementLabel?: string;   // Label for the measurement
   measurementStandard?: string; // New: Standard value to compare against (e.g. "PASS", "OK")
-  additionalFieldLabels?: string[]; // Labels for 8 custom fields. Empty string = disabled.
-  additionalFieldDefaults?: string[]; // New: Default values for the 8 fields.
-  additionalFieldValidationLists?: string[]; // New: Whitelists for the 8 fields (string data).
+  additionalFieldLabels?: string[]; // Labels for 16 custom fields. Empty string = disabled.
+  additionalFieldDefaults?: string[]; // New: Default values for the 16 fields.
+  additionalFieldValidationLists?: string[]; // New: Whitelists for the 16 fields (string data).
   additionalFieldMins?: string[]; // New: Min values for range check
   additionalFieldMaxs?: string[]; // New: Max values for range check
   validationRules?: ValidationRule[]; // New: List of flexible validation rules
 }
 
-// Helper to create empty arrays of size 8
-const EMPTY_8 = Array(8).fill("");
+// Helper to create empty arrays of size 16
+const EMPTY_16 = Array(16).fill("");
 
 export const DEFAULT_PROCESS_STAGES: Stage[] = [
   { 
@@ -58,11 +58,11 @@ export const DEFAULT_PROCESS_STAGES: Stage[] = [
     enableMeasurement: true, 
     measurementLabel: "Kết quả Test", 
     measurementStandard: "OK", 
-    additionalFieldLabels: [...EMPTY_8], 
-    additionalFieldDefaults: [...EMPTY_8],
-    additionalFieldValidationLists: [...EMPTY_8],
-    additionalFieldMins: [...EMPTY_8],
-    additionalFieldMaxs: [...EMPTY_8],
+    additionalFieldLabels: [...EMPTY_16], 
+    additionalFieldDefaults: [...EMPTY_16],
+    additionalFieldValidationLists: [...EMPTY_16],
+    additionalFieldMins: [...EMPTY_16],
+    additionalFieldMaxs: [...EMPTY_16],
     validationRules: []
   }
 ];

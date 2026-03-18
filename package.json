@@ -37,9 +37,7 @@
     },
     "files": [
       "dist/**/*",
-      "main.js",
-      "package.json"
-    ],
-    "extends": null
+      "main.js"
+    ]
   }
 }

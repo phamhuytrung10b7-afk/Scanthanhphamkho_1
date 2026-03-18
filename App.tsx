@@ -42,12 +42,12 @@ export default function App() {
 
         return parsed.map((s: any) => ({
           ...s,
-          // Update default array size from potential old/new sizes to 8
-          additionalFieldLabels: s.additionalFieldLabels ? [...s.additionalFieldLabels, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldDefaults: s.additionalFieldDefaults ? [...s.additionalFieldDefaults, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldValidationLists: s.additionalFieldValidationLists ? [...s.additionalFieldValidationLists, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldMins: s.additionalFieldMins ? [...s.additionalFieldMins, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
-          additionalFieldMaxs: s.additionalFieldMaxs ? [...s.additionalFieldMaxs, ...Array(8).fill("")].slice(0, 8) : Array(8).fill(""),
+          // Update default array size from potential old/new sizes to 16
+          additionalFieldLabels: s.additionalFieldLabels ? [...s.additionalFieldLabels, ...Array(16).fill("")].slice(0, 16) : Array(16).fill(""),
+          additionalFieldDefaults: s.additionalFieldDefaults ? [...s.additionalFieldDefaults, ...Array(16).fill("")].slice(0, 16) : Array(16).fill(""),
+          additionalFieldValidationLists: s.additionalFieldValidationLists ? [...s.additionalFieldValidationLists, ...Array(16).fill("")].slice(0, 16) : Array(16).fill(""),
+          additionalFieldMins: s.additionalFieldMins ? [...s.additionalFieldMins, ...Array(16).fill("")].slice(0, 16) : Array(16).fill(""),
+          additionalFieldMaxs: s.additionalFieldMaxs ? [...s.additionalFieldMaxs, ...Array(16).fill("")].slice(0, 16) : Array(16).fill(""),
           // Ensure validationRules exists (keeping for data compatibility even if unused logic)
           validationRules: s.validationRules || []
         }));
@@ -95,19 +95,20 @@ export default function App() {
   const [measurementValue, setMeasurementValue] = useState(''); 
   const [productInput, setProductInput] = useState('');
   
-  // New: State for 8 additional fields
-  const [additionalValues, setAdditionalValues] = useState<string[]>(Array(8).fill(""));
+  // New: State for 16 additional fields
+  const [additionalValues, setAdditionalValues] = useState<string[]>(Array(16).fill(""));
   
   const [errorModal, setErrorModal] = useState<ErrorState>({ isOpen: false, message: '' });
 
   // Refs
+  const audioContextRef = useRef<AudioContext | null>(null);
   const employeeInputRef = useRef<HTMLInputElement>(null);
   const defectInputRef = useRef<HTMLInputElement>(null);
   const measurementInputRef = useRef<HTMLInputElement>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
   const modelInputRef = useRef<HTMLInputElement>(null);
   const modelNameRef = useRef<HTMLInputElement>(null); // New Ref for Model Name
-  // Refs for 8 additional inputs
+  // Refs for 16 additional inputs
   const extraInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // --- DERIVED STATE: Plan List & Progress ---
@@ -164,10 +165,10 @@ export default function App() {
     if (currentStageObj?.additionalFieldDefaults) {
       // Create a copy of defaults, ensuring empty strings for missing values
       const defaults = [...currentStageObj.additionalFieldDefaults];
-      while(defaults.length < 8) defaults.push("");
+      while(defaults.length < 16) defaults.push("");
       setAdditionalValues(defaults);
     } else {
-      setAdditionalValues(Array(8).fill(""));
+      setAdditionalValues(Array(16).fill(""));
     }
   }, [currentStageObj]);
 
@@ -177,41 +178,75 @@ export default function App() {
   }, [currentStage, loadDefaults]);
 
   // --- AUDIO ALERTS ---
-  const playAlertSound = useCallback(() => {
+  const stopAlertSound = useCallback(() => {
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch (e) {
+        console.error("Error closing audio context", e);
+      }
+      audioContextRef.current = null;
+    }
+  }, []);
+
+  const playAlertSound = useCallback((loop: boolean = false) => {
+    stopAlertSound();
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
       
       const audioCtx = new AudioContextClass();
+      audioContextRef.current = audioCtx;
       
-      const playTone = (freq: number, start: number, duration: number, type: OscillatorType = 'square') => {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
+      const playSiren = () => {
+        if (!audioContextRef.current || audioCtx.state === 'closed') return;
         
-        osc.type = type;
-        osc.frequency.setValueAtTime(freq, start);
+        const now = audioCtx.currentTime;
+        const duration = 1.5; // Duration of one siren cycle
         
-        gain.gain.setValueAtTime(0.15, start);
-        gain.gain.exponentialRampToValueAtTime(0.01, start + duration);
+        // Create multiple oscillators for a "thick" and loud sound
+        const createOsc = (freq: number, detune: number) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          
+          osc.type = 'sawtooth'; // Harsh waveform
+          osc.frequency.setValueAtTime(freq, now);
+          // Siren effect: sweep frequency up and down
+          osc.frequency.exponentialRampToValueAtTime(freq * 1.5, now + duration * 0.5);
+          osc.frequency.exponentialRampToValueAtTime(freq, now + duration);
+          
+          osc.detune.setValueAtTime(detune, now);
+          
+          gain.gain.setValueAtTime(0, now);
+          gain.gain.linearRampToValueAtTime(0.3, now + 0.1); // Fast fade in
+          gain.gain.setValueAtTime(0.3, now + duration - 0.1);
+          gain.gain.linearRampToValueAtTime(0, now + duration); // Fade out at end of cycle
+          
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          
+          osc.start(now);
+          osc.stop(now + duration);
+        };
+
+        // Layered frequencies for maximum impact
+        createOsc(440, 0);
+        createOsc(445, 10);
+        createOsc(435, -10);
+        createOsc(880, 5); // High octave for piercing effect
         
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        
-        osc.start(start);
-        osc.stop(start + duration);
+        if (loop) {
+          setTimeout(() => {
+            if (audioContextRef.current === audioCtx) playSiren();
+          }, duration * 1000);
+        }
       };
 
-      // Play a rapid sequence of high-pitched "alarm" beeps
-      const now = audioCtx.currentTime;
-      playTone(880, now, 0.1, 'sawtooth');
-      playTone(440, now + 0.12, 0.1, 'sawtooth');
-      playTone(880, now + 0.24, 0.1, 'sawtooth');
-      playTone(440, now + 0.36, 0.1, 'sawtooth');
-      
+      playSiren();
     } catch (e) {
       console.error("Audio alert failed", e);
     }
-  }, []);
+  }, [stopAlertSound]);
 
   // --- INITIAL FOCUS ---
   useEffect(() => {
@@ -355,7 +390,7 @@ export default function App() {
   };
 
   const handleError = (message: string, scannedCode: string = '') => {
-    playAlertSound();
+    playAlertSound(true);
     const errorRecord: ScanRecord = {
       id: crypto.randomUUID(),
       stt: history.length + 1,
@@ -561,6 +596,7 @@ export default function App() {
   };
 
   const handleCloseError = () => {
+    stopAlertSound();
     setErrorModal({ isOpen: false, message: '' });
     setProductInput('');
     
@@ -859,14 +895,14 @@ export default function App() {
                         />
                       </div>
 
-                      {/* 8 Extra Fields (Grid) */}
+                      {/* 16 Extra Fields (Grid) */}
                       {activeExtraFields.length > 0 && (
                         <div className="bg-gray-50 p-2 rounded border border-gray-200">
                            <label className="block text-[10px] font-bold text-gray-500 mb-2 uppercase flex items-center gap-1">
                              <List size={10}/> Thông số mở rộng
                            </label>
-                           {/* Updated Grid for 8 items: 2 cols */}
-                           <div className="grid grid-cols-2 gap-2">
+                           {/* Updated Grid for 16 items: 2 cols on mobile, 3 on larger screens */}
+                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                               {activeExtraFields.map((field) => (
                                 <div key={field.idx}>
                                    <label className="block text-[9px] font-bold text-gray-500 mb-0.5 truncate" title={field.label}>
